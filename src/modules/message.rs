@@ -44,7 +44,7 @@ async fn sign_message(
     Json(payload): Json<SignMessageRequest>,
 ) -> Result<Json<serde_json::Value>, SolanaError> {
     // Validate required fields
-    if payload.message.is_empty() || payload.secret.is_empty() {
+    if payload.message.trim().is_empty() || payload.secret.trim().is_empty() {
         return Err(SolanaError::MissingFields);
     }
 
@@ -52,6 +52,13 @@ async fn sign_message(
     let secret_bytes = bs58::decode(&payload.secret)
         .into_vec()
         .map_err(|_| SolanaError::InvalidInput("Invalid secret key format".to_string()))?;
+
+    // Validate secret key length
+    if secret_bytes.len() != 64 {
+        return Err(SolanaError::InvalidInput(
+            "Invalid secret key length".to_string(),
+        ));
+    }
 
     // Create keypair from secret key
     let keypair = Keypair::from_bytes(&secret_bytes)
@@ -77,7 +84,10 @@ async fn verify_message(
     Json(payload): Json<VerifyMessageRequest>,
 ) -> Result<Json<serde_json::Value>, SolanaError> {
     // Validate required fields
-    if payload.message.is_empty() || payload.signature.is_empty() || payload.pubkey.is_empty() {
+    if payload.message.trim().is_empty()
+        || payload.signature.trim().is_empty()
+        || payload.pubkey.trim().is_empty()
+    {
         return Err(SolanaError::MissingFields);
     }
 
@@ -91,6 +101,13 @@ async fn verify_message(
     let signature_bytes = general_purpose::STANDARD
         .decode(&payload.signature)
         .map_err(|_| SolanaError::InvalidInput("Invalid signature format".to_string()))?;
+
+    // Validate signature length
+    if signature_bytes.len() != 64 {
+        return Err(SolanaError::InvalidInput(
+            "Invalid signature length".to_string(),
+        ));
+    }
 
     // Create signature from bytes
     let signature = Signature::try_from(signature_bytes.as_slice())

@@ -44,7 +44,12 @@ pub fn routes() -> Router {
 async fn create_token(
     Json(payload): Json<CreateTokenRequest>,
 ) -> Result<Json<serde_json::Value>, SolanaError> {
-    // Parse public keys
+    // Validate required fields are not empty FIRST
+    if payload.mint_authority.trim().is_empty() || payload.mint.trim().is_empty() {
+        return Err(SolanaError::MissingFields);
+    }
+
+    // Parse public keys AFTER validation
     let mint_authority = payload
         .mint_authority
         .parse::<Pubkey>()
@@ -90,7 +95,16 @@ async fn create_token(
 async fn mint_token(
     Json(payload): Json<MintTokenRequest>,
 ) -> Result<Json<serde_json::Value>, SolanaError> {
-    // Parse public keys
+    // Validate required fields are not empty FIRST
+    if payload.mint.trim().is_empty()
+        || payload.destination.trim().is_empty()
+        || payload.authority.trim().is_empty()
+        || payload.amount == 0
+    {
+        return Err(SolanaError::MissingFields);
+    }
+
+    // Parse public keys AFTER validation
     let mint = payload
         .mint
         .parse::<Pubkey>()

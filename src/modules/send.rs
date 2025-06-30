@@ -24,7 +24,7 @@ pub struct SendTokenRequest {
 pub struct SendSolResponse {
     pub program_id: String,
     pub accounts: Vec<String>,
-    pub instruction_data: String,
+    pub instruction_data: Vec<u8>,
 }
 
 #[derive(Serialize)]
@@ -38,7 +38,7 @@ pub struct AccountMetaTokenResponse {
 pub struct SendTokenResponse {
     pub program_id: String,
     pub accounts: Vec<AccountMetaTokenResponse>,
-    pub instruction_data: String,
+    pub instruction_data: Vec<u8>,
 }
 
 pub fn routes() -> Router {
@@ -50,14 +50,12 @@ pub fn routes() -> Router {
 async fn send_sol(
     Json(payload): Json<SendSolRequest>,
 ) -> Result<Json<serde_json::Value>, SolanaError> {
-    // Validate inputs
-    if payload.lamports == 0 {
-        return Err(SolanaError::InvalidInput(
-            "Amount must be greater than 0".to_string(),
-        ));
+    // Validate required fields are not empty FIRST
+    if payload.from.trim().is_empty() || payload.to.trim().is_empty() || payload.lamports == 0 {
+        return Err(SolanaError::MissingFields);
     }
 
-    // Parse public keys
+    // Parse public keys AFTER validation
     let from_pubkey = payload
         .from
         .parse::<Pubkey>()
@@ -85,7 +83,7 @@ async fn send_sol(
             .iter()
             .map(|acc| acc.pubkey.to_string())
             .collect(),
-        instruction_data: general_purpose::STANDARD.encode(&instruction.data),
+        instruction_data: instruction.data,
     };
 
     Ok(Json(serde_json::json!({
@@ -97,14 +95,16 @@ async fn send_sol(
 async fn send_token(
     Json(payload): Json<SendTokenRequest>,
 ) -> Result<Json<serde_json::Value>, SolanaError> {
-    // Validate inputs
-    if payload.amount == 0 {
-        return Err(SolanaError::InvalidInput(
-            "Amount must be greater than 0".to_string(),
-        ));
+    // Validate required fields are not empty FIRST
+    if payload.destination.trim().is_empty()
+        || payload.mint.trim().is_empty()
+        || payload.owner.trim().is_empty()
+        || payload.amount == 0
+    {
+        return Err(SolanaError::MissingFields);
     }
 
-    // Parse public keys
+    // Parse public keys AFTER validation
     let destination = payload
         .destination
         .parse::<Pubkey>()
@@ -147,7 +147,7 @@ async fn send_token(
     let response = SendTokenResponse {
         program_id: instruction.program_id.to_string(),
         accounts,
-        instruction_data: general_purpose::STANDARD.encode(&instruction.data),
+        instruction_data: instruction.data,
     };
 
     Ok(Json(serde_json::json!({
