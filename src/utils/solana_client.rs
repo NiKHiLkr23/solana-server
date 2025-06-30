@@ -8,7 +8,3 @@ pub fn get_rpc_client() -> RpcClient {
 
     RpcClient::new_with_commitment(rpc_url, CommitmentConfig::confirmed())
 }
-
-pub fn get_devnet_url() -> String {
-    "https://api.devnet.solana.com".to_string()
-}

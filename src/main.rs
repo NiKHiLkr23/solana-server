@@ -1,13 +1,8 @@
 use axum::routing::get;
-use axum::{
-    extract::rejection::JsonRejection,
-    http::{Method, StatusCode},
-    response::Json,
-    Router,
-};
+use axum::{http::Method, response::Json, Router};
 use dotenv::dotenv;
 use serde_json::json;
-use std::{env, net::SocketAddr};
+use std::env;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{info, Level};
@@ -16,31 +11,12 @@ use tracing_subscriber::FmtSubscriber;
 mod modules;
 mod utils;
 
-async fn handle_json_rejection(err: JsonRejection) -> (StatusCode, Json<serde_json::Value>) {
-    let message = match err {
-        JsonRejection::JsonDataError(_) => "Missing required fields",
-        JsonRejection::JsonSyntaxError(_) => "Invalid JSON format",
-        JsonRejection::MissingJsonContentType(_) => "Missing Content-Type: application/json header",
-        _ => "Missing required fields",
-    };
-
-    info!("Response: 400 - {}", message);
-
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({
-            "success": false,
-            "error": message
-        })),
-    )
-}
-
 // Fallback handler for unmatched routes
-async fn handle_404() -> (StatusCode, Json<serde_json::Value>) {
+async fn handle_404() -> (axum::http::StatusCode, Json<serde_json::Value>) {
     info!("Response: 400 - Endpoint not found");
 
     (
-        StatusCode::BAD_REQUEST,
+        axum::http::StatusCode::BAD_REQUEST,
         Json(json!({
             "success": false,
             "error": "Endpoint not found"
@@ -72,19 +48,39 @@ async fn main() {
         .merge(modules::token::routes())
         .merge(modules::message::routes())
         .merge(modules::send::routes())
-        .merge(modules::account::routes())
-        .merge(modules::airdrop::routes())
-        .merge(modules::transfer::routes())
         .fallback(handle_404)
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &axum::http::Request<_>| {
+                    let user_agent = request
+                        .headers()
+                        .get(axum::http::header::USER_AGENT)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or("unknown");
+
+                    tracing::info_span!(
+                        "request",
+                        method = %request.method(),
+                        uri = %request.uri(),
+                        user_agent = %user_agent
+                    )
+                })
+                .on_response(
+                    |response: &axum::http::Response<_>,
+                     latency: std::time::Duration,
+                     _span: &tracing::Span| {
+                        info!(status = response.status().as_u16(), latency = ?latency);
+                    },
+                ),
+        )
         .layer(cors);
 
     let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());
-    let socket_address: SocketAddr = format!("0.0.0.0:{}", port).parse().unwrap();
+    let addr = format!("0.0.0.0:{port}").parse().unwrap();
 
-    info!("Solana Server running on {}", socket_address);
+    info!("Solana Server running on http://localhost:{port}");
 
-    axum::Server::bind(&socket_address)
+    axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await
         .unwrap();
