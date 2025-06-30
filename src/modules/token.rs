@@ -3,6 +3,7 @@ use axum::{routing::post, Json, Router};
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
+use spl_associated_token_account::get_associated_token_address;
 use spl_token::instruction::{initialize_mint, mint_to};
 use tracing::info;
 
@@ -65,6 +66,13 @@ async fn create_token(
 
     let decimals = payload.decimals.ok_or(SolanaError::MissingFields)?;
 
+    // Validate decimals range (SPL tokens typically use 0-9 decimals)
+    if decimals > 9 {
+        return Err(SolanaError::InvalidInput(
+            "Decimals must be between 0 and 9".to_string(),
+        ));
+    }
+
     // Parse public keys AFTER validation
     let mint_authority_pubkey = mint_authority
         .parse::<Pubkey>()
@@ -74,12 +82,27 @@ async fn create_token(
         .parse::<Pubkey>()
         .map_err(|_| SolanaError::InvalidInput("Invalid mint public key".to_string()))?;
 
+    // Validate that mint and authority are different accounts
+    if mint_pubkey == mint_authority_pubkey {
+        return Err(SolanaError::InvalidInput(
+            "Mint account and mint authority cannot be the same".to_string(),
+        ));
+    }
+
+    // For informational purposes, show what the ATA would look like for the mint authority
+    let authority_ata = get_associated_token_address(&mint_authority_pubkey, &mint_pubkey);
+
+    info!(
+        "Creating mint: {} with authority: {} (Authority's ATA would be: {})",
+        mint_pubkey, mint_authority_pubkey, authority_ata
+    );
+
     // Create initialize mint instruction
     let instruction = initialize_mint(
         &spl_token::id(),
         &mint_pubkey,
         &mint_authority_pubkey,
-        Some(&mint_authority_pubkey),
+        Some(&mint_authority_pubkey), // Using same authority for freeze authority
         decimals,
     )
     .map_err(|e| SolanaError::TokenError(e.to_string()))?;
@@ -105,10 +128,7 @@ async fn create_token(
         "data": response
     });
 
-    info!(
-        "POST /token/create - Response: {}",
-        serde_json::to_string(&json_response).unwrap_or_default()
-    );
+    info!("Response: 200 - Token mint creation instruction generated successfully");
 
     Ok(Json(json_response))
 }
@@ -150,19 +170,27 @@ async fn mint_token(
         .parse::<Pubkey>()
         .map_err(|_| SolanaError::InvalidInput("Invalid mint address".to_string()))?;
 
-    let destination_pubkey = destination
+    let destination_wallet_pubkey = destination
         .parse::<Pubkey>()
-        .map_err(|_| SolanaError::InvalidInput("Invalid destination address".to_string()))?;
+        .map_err(|_| SolanaError::InvalidInput("Invalid destination wallet address".to_string()))?;
 
     let authority_pubkey = authority
         .parse::<Pubkey>()
         .map_err(|_| SolanaError::InvalidInput("Invalid authority address".to_string()))?;
 
-    // Create mint to instruction
+    // Derive the Associated Token Account (ATA) from the destination wallet and mint
+    let destination_ata = get_associated_token_address(&destination_wallet_pubkey, &mint_pubkey);
+
+    info!(
+        "Derived ATA: {} for wallet: {} and mint: {}",
+        destination_ata, destination_wallet_pubkey, mint_pubkey
+    );
+
+    // Create mint to instruction using the derived ATA
     let instruction = mint_to(
         &spl_token::id(),
         &mint_pubkey,
-        &destination_pubkey,
+        &destination_ata,
         &authority_pubkey,
         &[],
         amount,
@@ -190,7 +218,7 @@ async fn mint_token(
         "data": response
     });
 
-    info!("Response: 200");
+    info!("Response: 200 - ATA derived and instruction created successfully");
 
     Ok(Json(json_response))
 }

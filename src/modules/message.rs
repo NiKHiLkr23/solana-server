@@ -82,6 +82,12 @@ async fn sign_message(
     let message_bytes = message.as_bytes();
     let signature = keypair.sign_message(message_bytes);
 
+    info!(
+        "Signed message '{}' with pubkey: {}",
+        message,
+        keypair.pubkey()
+    );
+
     let response = SignMessageResponse {
         signature: general_purpose::STANDARD.encode(signature.as_ref()),
         public_key: keypair.pubkey().to_string(),
@@ -93,7 +99,7 @@ async fn sign_message(
         "data": response
     });
 
-    info!("Response: 200");
+    info!("Response: 200 - Message signed successfully");
 
     Ok(Json(json_response))
 }
@@ -146,9 +152,17 @@ async fn verify_message(
     let signature = Signature::try_from(signature_bytes.as_slice())
         .map_err(|_| SolanaError::InvalidInput("Invalid signature".to_string()))?;
 
-    // Verify the signature
+    // Verify the signature using the correct method for message signing
     let message_bytes = message.as_bytes();
-    let valid = signature.verify(pubkey.as_ref(), message_bytes);
+
+    // The correct way to verify a message signature in Solana
+    // Use signature.verify with pubkey bytes and message bytes
+    let valid = signature.verify(&pubkey.to_bytes(), message_bytes);
+
+    info!(
+        "Verification result: {} for message '{}' with pubkey: {}",
+        valid, message, pubkey
+    );
 
     let response = VerifyMessageResponse {
         valid,
@@ -161,7 +175,7 @@ async fn verify_message(
         "data": response
     });
 
-    info!("Response: 200");
+    info!("Response: 200 - Message verification completed");
 
     Ok(Json(json_response))
 }

@@ -3,6 +3,7 @@ use axum::{routing::post, Json, Router};
 use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use solana_sdk::{pubkey::Pubkey, system_instruction};
+use spl_associated_token_account::get_associated_token_address;
 use spl_token::instruction::transfer;
 use tracing::info;
 
@@ -74,6 +75,22 @@ async fn send_sol(
         .filter(|&l| l > 0)
         .ok_or(SolanaError::MissingFields)?;
 
+    // Validate lamports amount (reasonable limits)
+    const MIN_LAMPORTS: u64 = 1; // Minimum 1 lamport
+    const MAX_LAMPORTS: u64 = 100_000_000_000; // Maximum 100 SOL (100 * 10^9 lamports)
+
+    if lamports < MIN_LAMPORTS {
+        return Err(SolanaError::InvalidInput(
+            "Amount must be at least 1 lamport".to_string(),
+        ));
+    }
+
+    if lamports > MAX_LAMPORTS {
+        return Err(SolanaError::InvalidInput(
+            "Amount exceeds maximum limit (100 SOL)".to_string(),
+        ));
+    }
+
     // Parse public keys AFTER validation
     let from_pubkey = from
         .parse::<Pubkey>()
@@ -83,12 +100,20 @@ async fn send_sol(
         .parse::<Pubkey>()
         .map_err(|_| SolanaError::InvalidInput("Invalid recipient address".to_string()))?;
 
-    // Additional validation - check if addresses are valid Solana addresses
+    // Validate that sender and recipient are different
     if from_pubkey == to_pubkey {
         return Err(SolanaError::InvalidInput(
             "Sender and recipient cannot be the same".to_string(),
         ));
     }
+
+    info!(
+        "Creating SOL transfer: {} lamports ({} SOL) from {} to {}",
+        lamports,
+        lamports as f64 / 1_000_000_000.0,
+        from_pubkey,
+        to_pubkey
+    );
 
     // Create transfer instruction
     let instruction = system_instruction::transfer(&from_pubkey, &to_pubkey, lamports);
@@ -108,7 +133,7 @@ async fn send_sol(
         "data": response
     });
 
-    info!("Response: 200");
+    info!("Response: 200 - SOL transfer instruction created successfully");
 
     Ok(Json(json_response))
 }
@@ -145,10 +170,17 @@ async fn send_token(
         .filter(|&a| a > 0)
         .ok_or(SolanaError::MissingFields)?;
 
+    // Validate amount range (prevent overflow and ensure reasonable limits)
+    if amount > u64::MAX / 2 {
+        return Err(SolanaError::InvalidInput(
+            "Token amount is too large".to_string(),
+        ));
+    }
+
     // Parse public keys AFTER validation
     let destination_pubkey = destination
         .parse::<Pubkey>()
-        .map_err(|_| SolanaError::InvalidInput("Invalid destination address".to_string()))?;
+        .map_err(|_| SolanaError::InvalidInput("Invalid destination wallet address".to_string()))?;
 
     let mint_pubkey = mint
         .parse::<Pubkey>()
@@ -158,17 +190,32 @@ async fn send_token(
         .parse::<Pubkey>()
         .map_err(|_| SolanaError::InvalidInput("Invalid owner address".to_string()))?;
 
-    // Get associated token accounts (simplified - in reality you'd derive these)
-    let source =
-        spl_associated_token_account::get_associated_token_address(&owner_pubkey, &mint_pubkey);
-    let dest = spl_associated_token_account::get_associated_token_address(
-        &destination_pubkey,
-        &mint_pubkey,
+    // Validate that owner and destination are different
+    if owner_pubkey == destination_pubkey {
+        return Err(SolanaError::InvalidInput(
+            "Token owner and destination cannot be the same".to_string(),
+        ));
+    }
+
+    // Derive Associated Token Accounts for both owner and destination
+    let source_ata = get_associated_token_address(&owner_pubkey, &mint_pubkey);
+    let destination_ata = get_associated_token_address(&destination_pubkey, &mint_pubkey);
+
+    info!(
+        "Creating token transfer: {} tokens of mint {} from owner {} (ATA: {}) to destination {} (ATA: {})",
+        amount, mint_pubkey, owner_pubkey, source_ata, destination_pubkey, destination_ata
     );
 
-    // Create transfer instruction
-    let instruction = transfer(&spl_token::id(), &source, &dest, &owner_pubkey, &[], amount)
-        .map_err(|e| SolanaError::TokenError(e.to_string()))?;
+    // Create transfer instruction using derived ATAs
+    let instruction = transfer(
+        &spl_token::id(),
+        &source_ata,
+        &destination_ata,
+        &owner_pubkey,
+        &[],
+        amount,
+    )
+    .map_err(|e| SolanaError::TokenError(e.to_string()))?;
 
     let accounts: Vec<AccountMetaTokenResponse> = instruction
         .accounts
@@ -190,7 +237,7 @@ async fn send_token(
         "data": response
     });
 
-    info!("Response: 200");
+    info!("Response: 200 - Token transfer instruction created successfully");
 
     Ok(Json(json_response))
 }
