@@ -6,18 +6,19 @@ use solana_sdk::{
     pubkey::Pubkey,
     signature::{Keypair, Signature, Signer},
 };
+use tracing::info;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct SignMessageRequest {
-    pub message: String,
-    pub secret: String, // Base58 encoded secret key
+    pub message: Option<String>,
+    pub secret: Option<String>, // Base58 encoded secret key
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct VerifyMessageRequest {
-    pub message: String,
-    pub signature: String, // Base64 encoded signature
-    pub pubkey: String,    // Base58 encoded public key
+    pub message: Option<String>,
+    pub signature: Option<String>, // Base64 encoded signature
+    pub pubkey: Option<String>,    // Base58 encoded public key
 }
 
 #[derive(Serialize)]
@@ -43,13 +44,26 @@ pub fn routes() -> Router {
 async fn sign_message(
     Json(payload): Json<SignMessageRequest>,
 ) -> Result<Json<serde_json::Value>, SolanaError> {
-    // Validate required fields
-    if payload.message.trim().is_empty() || payload.secret.trim().is_empty() {
-        return Err(SolanaError::MissingFields);
-    }
+    info!(
+        "POST /message/sign - Request: {}",
+        serde_json::to_string(&payload).unwrap_or_default()
+    );
+
+    // Validate required fields are present and not empty
+    let message = payload
+        .message
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
+
+    let secret = payload
+        .secret
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
 
     // Decode the base58 secret key
-    let secret_bytes = bs58::decode(&payload.secret)
+    let secret_bytes = bs58::decode(secret)
         .into_vec()
         .map_err(|_| SolanaError::InvalidInput("Invalid secret key format".to_string()))?;
 
@@ -65,41 +79,60 @@ async fn sign_message(
         .map_err(|_| SolanaError::InvalidInput("Invalid secret key".to_string()))?;
 
     // Sign the message
-    let message_bytes = payload.message.as_bytes();
+    let message_bytes = message.as_bytes();
     let signature = keypair.sign_message(message_bytes);
 
     let response = SignMessageResponse {
         signature: general_purpose::STANDARD.encode(signature.as_ref()),
         public_key: keypair.pubkey().to_string(),
-        message: payload.message,
+        message: message.to_string(),
     };
 
-    Ok(Json(serde_json::json!({
+    let json_response = serde_json::json!({
         "success": true,
         "data": response
-    })))
+    });
+
+    info!("Response: 200");
+
+    Ok(Json(json_response))
 }
 
 async fn verify_message(
     Json(payload): Json<VerifyMessageRequest>,
 ) -> Result<Json<serde_json::Value>, SolanaError> {
-    // Validate required fields
-    if payload.message.trim().is_empty()
-        || payload.signature.trim().is_empty()
-        || payload.pubkey.trim().is_empty()
-    {
-        return Err(SolanaError::MissingFields);
-    }
+    info!(
+        "POST /message/verify - Request: {}",
+        serde_json::to_string(&payload).unwrap_or_default()
+    );
+
+    // Validate required fields are present and not empty
+    let message = payload
+        .message
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
+
+    let signature_str = payload
+        .signature
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
+
+    let pubkey_str = payload
+        .pubkey
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
 
     // Parse the public key
-    let pubkey = payload
-        .pubkey
+    let pubkey = pubkey_str
         .parse::<Pubkey>()
         .map_err(|_| SolanaError::InvalidInput("Invalid public key format".to_string()))?;
 
     // Decode the base64 signature
     let signature_bytes = general_purpose::STANDARD
-        .decode(&payload.signature)
+        .decode(signature_str)
         .map_err(|_| SolanaError::InvalidInput("Invalid signature format".to_string()))?;
 
     // Validate signature length
@@ -114,17 +147,21 @@ async fn verify_message(
         .map_err(|_| SolanaError::InvalidInput("Invalid signature".to_string()))?;
 
     // Verify the signature
-    let message_bytes = payload.message.as_bytes();
+    let message_bytes = message.as_bytes();
     let valid = signature.verify(pubkey.as_ref(), message_bytes);
 
     let response = VerifyMessageResponse {
         valid,
-        message: payload.message,
-        pubkey: payload.pubkey,
+        message: message.to_string(),
+        pubkey: pubkey_str.to_string(),
     };
 
-    Ok(Json(serde_json::json!({
+    let json_response = serde_json::json!({
         "success": true,
         "data": response
-    })))
+    });
+
+    info!("Response: 200");
+
+    Ok(Json(json_response))
 }

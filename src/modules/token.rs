@@ -4,21 +4,22 @@ use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use spl_token::instruction::{initialize_mint, mint_to};
+use tracing::info;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct CreateTokenRequest {
     #[serde(rename = "mintAuthority")]
-    pub mint_authority: String,
-    pub mint: String,
-    pub decimals: u8,
+    pub mint_authority: Option<String>,
+    pub mint: Option<String>,
+    pub decimals: Option<u8>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct MintTokenRequest {
-    pub mint: String,
-    pub destination: String,
-    pub authority: String,
-    pub amount: u64,
+    pub mint: Option<String>,
+    pub destination: Option<String>,
+    pub authority: Option<String>,
+    pub amount: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -44,29 +45,42 @@ pub fn routes() -> Router {
 async fn create_token(
     Json(payload): Json<CreateTokenRequest>,
 ) -> Result<Json<serde_json::Value>, SolanaError> {
-    // Validate required fields are not empty FIRST
-    if payload.mint_authority.trim().is_empty() || payload.mint.trim().is_empty() {
-        return Err(SolanaError::MissingFields);
-    }
+    info!(
+        "POST /token/create - Request: {}",
+        serde_json::to_string(&payload).unwrap_or_default()
+    );
 
-    // Parse public keys AFTER validation
+    // Validate required fields are present and not empty
     let mint_authority = payload
         .mint_authority
-        .parse::<Pubkey>()
-        .map_err(|_| SolanaError::InvalidInput("Invalid mint authority public key".to_string()))?;
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
 
     let mint = payload
         .mint
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
+
+    let decimals = payload.decimals.ok_or(SolanaError::MissingFields)?;
+
+    // Parse public keys AFTER validation
+    let mint_authority_pubkey = mint_authority
+        .parse::<Pubkey>()
+        .map_err(|_| SolanaError::InvalidInput("Invalid mint authority public key".to_string()))?;
+
+    let mint_pubkey = mint
         .parse::<Pubkey>()
         .map_err(|_| SolanaError::InvalidInput("Invalid mint public key".to_string()))?;
 
     // Create initialize mint instruction
     let instruction = initialize_mint(
         &spl_token::id(),
-        &mint,
-        &mint_authority,
-        Some(&mint_authority),
-        payload.decimals,
+        &mint_pubkey,
+        &mint_authority_pubkey,
+        Some(&mint_authority_pubkey),
+        decimals,
     )
     .map_err(|e| SolanaError::TokenError(e.to_string()))?;
 
@@ -86,48 +100,72 @@ async fn create_token(
         instruction_data: general_purpose::STANDARD.encode(&instruction.data),
     };
 
-    Ok(Json(serde_json::json!({
+    let json_response = serde_json::json!({
         "success": true,
         "data": response
-    })))
+    });
+
+    info!(
+        "POST /token/create - Response: {}",
+        serde_json::to_string(&json_response).unwrap_or_default()
+    );
+
+    Ok(Json(json_response))
 }
 
 async fn mint_token(
     Json(payload): Json<MintTokenRequest>,
 ) -> Result<Json<serde_json::Value>, SolanaError> {
-    // Validate required fields are not empty FIRST
-    if payload.mint.trim().is_empty()
-        || payload.destination.trim().is_empty()
-        || payload.authority.trim().is_empty()
-        || payload.amount == 0
-    {
-        return Err(SolanaError::MissingFields);
-    }
+    info!(
+        "POST /token/mint - Request: {}",
+        serde_json::to_string(&payload).unwrap_or_default()
+    );
 
-    // Parse public keys AFTER validation
+    // Validate required fields are present and not empty
     let mint = payload
         .mint
-        .parse::<Pubkey>()
-        .map_err(|_| SolanaError::InvalidInput("Invalid mint address".to_string()))?;
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
 
     let destination = payload
         .destination
-        .parse::<Pubkey>()
-        .map_err(|_| SolanaError::InvalidInput("Invalid destination address".to_string()))?;
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
 
     let authority = payload
         .authority
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
+
+    let amount = payload
+        .amount
+        .filter(|&a| a > 0)
+        .ok_or(SolanaError::MissingFields)?;
+
+    // Parse public keys AFTER validation
+    let mint_pubkey = mint
+        .parse::<Pubkey>()
+        .map_err(|_| SolanaError::InvalidInput("Invalid mint address".to_string()))?;
+
+    let destination_pubkey = destination
+        .parse::<Pubkey>()
+        .map_err(|_| SolanaError::InvalidInput("Invalid destination address".to_string()))?;
+
+    let authority_pubkey = authority
         .parse::<Pubkey>()
         .map_err(|_| SolanaError::InvalidInput("Invalid authority address".to_string()))?;
 
     // Create mint to instruction
     let instruction = mint_to(
         &spl_token::id(),
-        &mint,
-        &destination,
-        &authority,
+        &mint_pubkey,
+        &destination_pubkey,
+        &authority_pubkey,
         &[],
-        payload.amount,
+        amount,
     )
     .map_err(|e| SolanaError::TokenError(e.to_string()))?;
 
@@ -147,8 +185,12 @@ async fn mint_token(
         instruction_data: general_purpose::STANDARD.encode(&instruction.data),
     };
 
-    Ok(Json(serde_json::json!({
+    let json_response = serde_json::json!({
         "success": true,
         "data": response
-    })))
+    });
+
+    info!("Response: 200");
+
+    Ok(Json(json_response))
 }

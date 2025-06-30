@@ -5,6 +5,7 @@ use axum::{
 };
 use serde_json::json;
 use thiserror::Error;
+use tracing::info;
 
 #[derive(Error, Debug)]
 pub enum SolanaError {
@@ -36,10 +37,13 @@ pub enum SolanaError {
 impl IntoResponse for SolanaError {
     fn into_response(self) -> Response {
         let status = StatusCode::BAD_REQUEST;
+        let error_message = self.to_string();
+
+        info!("Response: 400 - {}", error_message);
 
         let body = Json(json!({
             "success": false,
-            "error": self.to_string()
+            "error": error_message
         }));
 
         (status, body).into_response()

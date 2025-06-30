@@ -9,6 +9,7 @@ use dotenv::dotenv;
 use serde_json::json;
 use std::{env, net::SocketAddr};
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::trace::TraceLayer;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -17,17 +18,32 @@ mod utils;
 
 async fn handle_json_rejection(err: JsonRejection) -> (StatusCode, Json<serde_json::Value>) {
     let message = match err {
-        JsonRejection::JsonDataError(_) => "Invalid JSON format",
-        JsonRejection::JsonSyntaxError(_) => "JSON syntax error",
+        JsonRejection::JsonDataError(_) => "Missing required fields",
+        JsonRejection::JsonSyntaxError(_) => "Invalid JSON format",
         JsonRejection::MissingJsonContentType(_) => "Missing Content-Type: application/json header",
-        _ => "JSON processing error",
+        _ => "Missing required fields",
     };
+
+    info!("Response: 400 - {}", message);
 
     (
         StatusCode::BAD_REQUEST,
         Json(json!({
             "success": false,
             "error": message
+        })),
+    )
+}
+
+// Fallback handler for unmatched routes
+async fn handle_404() -> (StatusCode, Json<serde_json::Value>) {
+    info!("Response: 400 - Endpoint not found");
+
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "success": false,
+            "error": "Endpoint not found"
         })),
     )
 }
@@ -59,6 +75,8 @@ async fn main() {
         .merge(modules::account::routes())
         .merge(modules::airdrop::routes())
         .merge(modules::transfer::routes())
+        .fallback(handle_404)
+        .layer(TraceLayer::new_for_http())
         .layer(cors);
 
     let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());

@@ -4,27 +4,28 @@ use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use solana_sdk::{pubkey::Pubkey, system_instruction};
 use spl_token::instruction::transfer;
+use tracing::info;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct SendSolRequest {
-    pub from: String,
-    pub to: String,
-    pub lamports: u64,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub lamports: Option<u64>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct SendTokenRequest {
-    pub destination: String,
-    pub mint: String,
-    pub owner: String,
-    pub amount: u64,
+    pub destination: Option<String>,
+    pub mint: Option<String>,
+    pub owner: Option<String>,
+    pub amount: Option<u64>,
 }
 
 #[derive(Serialize)]
 pub struct SendSolResponse {
     pub program_id: String,
     pub accounts: Vec<String>,
-    pub instruction_data: Vec<u8>,
+    pub instruction_data: String,
 }
 
 #[derive(Serialize)]
@@ -38,7 +39,7 @@ pub struct AccountMetaTokenResponse {
 pub struct SendTokenResponse {
     pub program_id: String,
     pub accounts: Vec<AccountMetaTokenResponse>,
-    pub instruction_data: Vec<u8>,
+    pub instruction_data: String,
 }
 
 pub fn routes() -> Router {
@@ -50,19 +51,35 @@ pub fn routes() -> Router {
 async fn send_sol(
     Json(payload): Json<SendSolRequest>,
 ) -> Result<Json<serde_json::Value>, SolanaError> {
-    // Validate required fields are not empty FIRST
-    if payload.from.trim().is_empty() || payload.to.trim().is_empty() || payload.lamports == 0 {
-        return Err(SolanaError::MissingFields);
-    }
+    info!(
+        "POST /send/sol - Request: {}",
+        serde_json::to_string(&payload).unwrap_or_default()
+    );
+
+    // Validate required fields are present and not empty
+    let from = payload
+        .from
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
+
+    let to = payload
+        .to
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
+
+    let lamports = payload
+        .lamports
+        .filter(|&l| l > 0)
+        .ok_or(SolanaError::MissingFields)?;
 
     // Parse public keys AFTER validation
-    let from_pubkey = payload
-        .from
+    let from_pubkey = from
         .parse::<Pubkey>()
         .map_err(|_| SolanaError::InvalidInput("Invalid sender address".to_string()))?;
 
-    let to_pubkey = payload
-        .to
+    let to_pubkey = to
         .parse::<Pubkey>()
         .map_err(|_| SolanaError::InvalidInput("Invalid recipient address".to_string()))?;
 
@@ -74,7 +91,7 @@ async fn send_sol(
     }
 
     // Create transfer instruction
-    let instruction = system_instruction::transfer(&from_pubkey, &to_pubkey, payload.lamports);
+    let instruction = system_instruction::transfer(&from_pubkey, &to_pubkey, lamports);
 
     let response = SendSolResponse {
         program_id: instruction.program_id.to_string(),
@@ -83,57 +100,75 @@ async fn send_sol(
             .iter()
             .map(|acc| acc.pubkey.to_string())
             .collect(),
-        instruction_data: instruction.data,
+        instruction_data: general_purpose::STANDARD.encode(&instruction.data),
     };
 
-    Ok(Json(serde_json::json!({
+    let json_response = serde_json::json!({
         "success": true,
         "data": response
-    })))
+    });
+
+    info!("Response: 200");
+
+    Ok(Json(json_response))
 }
 
 async fn send_token(
     Json(payload): Json<SendTokenRequest>,
 ) -> Result<Json<serde_json::Value>, SolanaError> {
-    // Validate required fields are not empty FIRST
-    if payload.destination.trim().is_empty()
-        || payload.mint.trim().is_empty()
-        || payload.owner.trim().is_empty()
-        || payload.amount == 0
-    {
-        return Err(SolanaError::MissingFields);
-    }
+    info!(
+        "POST /send/token - Request: {}",
+        serde_json::to_string(&payload).unwrap_or_default()
+    );
 
-    // Parse public keys AFTER validation
+    // Validate required fields are present and not empty
     let destination = payload
         .destination
-        .parse::<Pubkey>()
-        .map_err(|_| SolanaError::InvalidInput("Invalid destination address".to_string()))?;
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
 
     let mint = payload
         .mint
-        .parse::<Pubkey>()
-        .map_err(|_| SolanaError::InvalidInput("Invalid mint address".to_string()))?;
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
 
     let owner = payload
         .owner
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or(SolanaError::MissingFields)?;
+
+    let amount = payload
+        .amount
+        .filter(|&a| a > 0)
+        .ok_or(SolanaError::MissingFields)?;
+
+    // Parse public keys AFTER validation
+    let destination_pubkey = destination
+        .parse::<Pubkey>()
+        .map_err(|_| SolanaError::InvalidInput("Invalid destination address".to_string()))?;
+
+    let mint_pubkey = mint
+        .parse::<Pubkey>()
+        .map_err(|_| SolanaError::InvalidInput("Invalid mint address".to_string()))?;
+
+    let owner_pubkey = owner
         .parse::<Pubkey>()
         .map_err(|_| SolanaError::InvalidInput("Invalid owner address".to_string()))?;
 
     // Get associated token accounts (simplified - in reality you'd derive these)
-    let source = spl_associated_token_account::get_associated_token_address(&owner, &mint);
-    let dest = spl_associated_token_account::get_associated_token_address(&destination, &mint);
+    let source =
+        spl_associated_token_account::get_associated_token_address(&owner_pubkey, &mint_pubkey);
+    let dest = spl_associated_token_account::get_associated_token_address(
+        &destination_pubkey,
+        &mint_pubkey,
+    );
 
     // Create transfer instruction
-    let instruction = transfer(
-        &spl_token::id(),
-        &source,
-        &dest,
-        &owner,
-        &[],
-        payload.amount,
-    )
-    .map_err(|e| SolanaError::TokenError(e.to_string()))?;
+    let instruction = transfer(&spl_token::id(), &source, &dest, &owner_pubkey, &[], amount)
+        .map_err(|e| SolanaError::TokenError(e.to_string()))?;
 
     let accounts: Vec<AccountMetaTokenResponse> = instruction
         .accounts
@@ -147,11 +182,15 @@ async fn send_token(
     let response = SendTokenResponse {
         program_id: instruction.program_id.to_string(),
         accounts,
-        instruction_data: instruction.data,
+        instruction_data: general_purpose::STANDARD.encode(&instruction.data),
     };
 
-    Ok(Json(serde_json::json!({
+    let json_response = serde_json::json!({
         "success": true,
         "data": response
-    })))
+    });
+
+    info!("Response: 200");
+
+    Ok(Json(json_response))
 }

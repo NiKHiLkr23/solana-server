@@ -2,6 +2,7 @@ use crate::utils::errors::SolanaError;
 use axum::{routing::post, Json, Router};
 use serde::Serialize;
 use solana_sdk::signature::{Keypair, Signer};
+use tracing::info;
 
 #[derive(Serialize)]
 pub struct KeypairResponse {
@@ -14,6 +15,8 @@ pub fn routes() -> Router {
 }
 
 async fn generate_keypair() -> Result<Json<serde_json::Value>, SolanaError> {
+    info!("POST /keypair");
+
     let keypair = Keypair::new();
 
     let response = KeypairResponse {
@@ -21,8 +24,12 @@ async fn generate_keypair() -> Result<Json<serde_json::Value>, SolanaError> {
         secret: bs58::encode(&keypair.to_bytes()).into_string(),
     };
 
-    Ok(Json(serde_json::json!({
+    let json_response = serde_json::json!({
         "success": true,
         "data": response
-    })))
+    });
+
+    info!("Response: 200");
+
+    Ok(Json(json_response))
 }
