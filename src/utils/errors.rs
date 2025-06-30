@@ -22,21 +22,24 @@ pub enum SolanaError {
 
     #[error("Transaction failed: {0}")]
     TransactionFailed(String),
+
+    #[error("Missing required fields")]
+    MissingFields,
+
+    #[error("Invalid signature")]
+    InvalidSignature,
+
+    #[error("Token error: {0}")]
+    TokenError(String),
 }
 
 impl IntoResponse for SolanaError {
     fn into_response(self) -> Response {
-        let (status, message) = match self {
-            SolanaError::ClientError(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-            SolanaError::SdkError(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-            SolanaError::InvalidInput(_) => (StatusCode::BAD_REQUEST, self.to_string()),
-            SolanaError::InsufficientFunds => (StatusCode::BAD_REQUEST, self.to_string()),
-            SolanaError::TransactionFailed(_) => (StatusCode::BAD_REQUEST, self.to_string()),
-        };
+        let status = StatusCode::BAD_REQUEST;
 
         let body = Json(json!({
-            "error": message,
-            "status": status.as_u16()
+            "success": false,
+            "error": self.to_string()
         }));
 
         (status, body).into_response()
